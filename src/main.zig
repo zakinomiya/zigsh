@@ -5,6 +5,7 @@ const cd = @import("./builtins/cd.zig").cd;
 const Profile = @import("./profile.zig").Profile;
 
 const max_line_length: usize = 4095;
+const rcfile_name: []const u8 = ".mashrc";
 
 fn readLine(reader: anytype, buf: []u8) !?[]u8 {
     return try reader.readUntilDelimiterOrEof(buf, '\n');
@@ -16,6 +17,8 @@ pub const Shell = struct {
     exec: BuiltinCmd,
     cwd: *[]const u8,
     allocator: std.mem.Allocator,
+
+    fn login(self: Shell) void {}
 
     fn getCmd(self: Shell, program_name: []const u8) *const BuiltinCmd {
         for (self.builtin_commands) |cmd| {
@@ -41,37 +44,41 @@ pub const Shell = struct {
         std.debug.print("{s} > ", .{array_list.toOwnedSlice()});
     }
 
-    fn mainLoop(self: Shell, reader: anytype) !void {
+    fn execLine(self: Shell, reader: anytype) !void {
+        var buf: [max_line_length]u8 = undefined;
+        const line = readLine(reader, &buf) catch |err| switch (err) {
+            error.StreamTooLong => {
+                std.debug.print("command too long.\n", .{});
+                continue;
+            },
+            else => {
+                std.debug.print("ERR: {s}\n", .{err});
+                continue;
+            },
+        };
+        if (line == null) continue;
+
+        var l = line.?;
+        var args_list = std.ArrayList([]const u8).init(self.allocator);
+        defer args_list.deinit();
+
+        var token_iterator = std.mem.tokenize(u8, l, " ");
+        const program_name = token_iterator.next() orelse continue;
+
+        while (token_iterator.next()) |token| {
+            try args_list.append(token);
+        }
+
+        _ = self.getCmd(program_name)
+            .execFn(program_name, args_list.items, self.allocator);
+    }
+
+    fn mainLoop(self: Shell) !void {
+        var reader = std.io.getStdIn().reader();
         while (true) {
             self.cwd.* = try self.getCwd();
             self.printPrompt();
-
-            var buf: [max_line_length]u8 = undefined;
-            const line = readLine(reader, &buf) catch |err| switch (err) {
-                error.StreamTooLong => {
-                    std.debug.print("command too long.\n", .{});
-                    continue;
-                },
-                else => {
-                    std.debug.print("ERR: {s}\n", .{err});
-                    continue;
-                },
-            };
-            if (line == null) continue;
-
-            var l = line.?;
-            var args_list = std.ArrayList([]const u8).init(self.allocator);
-            defer args_list.deinit();
-
-            var token_iterator = std.mem.tokenize(u8, l, " ");
-            const program_name = token_iterator.next() orelse continue;
-
-            while (token_iterator.next()) |token| {
-                try args_list.append(token);
-            }
-
-            _ = self.getCmd(program_name)
-                .execFn(program_name, args_list.items, self.allocator);
+            self.execLine(reader);
         }
     }
 };
@@ -80,7 +87,6 @@ pub fn main() anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    var stdin = std.io.getStdIn();
     var profile = Profile.default();
 
     const shell = Shell{
@@ -91,5 +97,5 @@ pub fn main() anyerror!void {
         .cwd = &try std.process.getCwdAlloc(arena.allocator()),
     };
 
-    try shell.mainLoop(stdin.reader());
+    try shell.mainLoop();
 }

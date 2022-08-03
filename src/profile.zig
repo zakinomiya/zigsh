@@ -5,7 +5,11 @@ const PromptSettings = struct {
 pub const Profile = struct {
     prompt_settings: PromptSettings,
 
-    pub fn default() Profile {
+    pub fn init() Profile {
+        return Profile.default();
+    }
+
+    fn default() Profile {
         return .{
             .prompt_settings = .{
                 .print_cwd = true,
